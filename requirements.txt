@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pdfplumber
+pandas
+torch
+transformers
+sentence-transformers
+spacy
