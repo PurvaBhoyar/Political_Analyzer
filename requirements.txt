@@ -7,3 +7,6 @@ transformers
 sentence-transformers
 spacy
 groq
+python-dotenv
+thefuzz
+python-multipart

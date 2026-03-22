@@ -3,15 +3,19 @@ import pandas as pd
 import torch
 import os
 
+from pathlib import Path
+
 def build_and_run_checker():
     print("--- SEMANTIC HISTORICAL FACT-CHECKER (Tiered) ---")
     
     # 1. Load History
-    db_path = "data/processed/gold_database.csv"
-    if not os.path.exists(db_path):
+    base_dir = Path(__file__).parent
+    db_path = base_dir / "data" / "processed" / "gold_database.csv"
+    
+    if not db_path.exists():
         print(f"Error: {db_path} not found.")
         return
-    history = pd.read_csv(db_path)
+    history = pd.read_csv(str(db_path))
     
     # 2. Load Model
     model = SentenceTransformer('all-MiniLM-L6-v2')
@@ -23,7 +27,8 @@ def build_and_run_checker():
     # 4. Load 2024 Targets
     from nlp_engine import parser
     print("Extracting 2024 Manifesto promises...")
-    df_2024 = parser.extract_manifesto_promises("data/raw/BJP-Election-english-2024.pdf")
+    manifesto_path = base_dir / "data" / "raw" / "BJP-Election-english-2024.pdf"
+    df_2024 = parser.extract_manifesto_promises(str(manifesto_path))
     
     # 5. Batch Process 2024 Predictions
     print(f"Analyzing {len(df_2024)} promises...")

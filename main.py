@@ -4,17 +4,26 @@ from sentence_transformers import SentenceTransformer, util
 import pandas as pd
 import torch
 import os
+import asyncio
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env file if it exists (Fix for Section 6 point 82)
+load_dotenv()
 
 app = FastAPI(title="Political Promise Fact-Checker", version="2.0")
+
+# Setup Pathlib (Fix for Section 1 point 19)
+BASE_DIR = Path(__file__).parent
+HISTORY_PATH = BASE_DIR / "data" / "processed" / "gold_database.csv"
 
 print("Loading Semantic Engine...")
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
-history_path = "data/processed/gold_database.csv"
-
-if os.path.exists(history_path):
-    history = pd.read_csv(history_path)
+if HISTORY_PATH.exists():
+    history = pd.read_csv(str(HISTORY_PATH))
     print(f"Indexing {len(history)} historical records...")
+    # Pre-index for performance
     history_embeddings = model.encode(history['original_text'].astype(str).tolist(), convert_to_tensor=True)
 else:
     history = None
@@ -26,14 +35,6 @@ class PromiseInput(BaseModel):
 
 label_map = {0: "Unlikely", 1: "Partial", 2: "Highly Likely"}
 
-VERDICT_RANK = {
-    "Likely Fulfilled": 3,
-    "Partially Fulfilled": 2,
-    "Unlikely to be Fulfilled": 1,
-    "Cannot Determine": 0,
-    "Unavailable": -1
-}
-
 SEMANTIC_TO_VERDICT = {
     "Highly Likely": "Likely Fulfilled",
     "Partial": "Partially Fulfilled",
@@ -41,10 +42,6 @@ SEMANTIC_TO_VERDICT = {
 }
 
 def resolve_final_verdict(semantic_base: str, llm_result: dict, top_score: float) -> dict:
-    """
-    Semantic system is the primary verdict.
-    LLM is a secondary reviewer — its disagreement is flagged but does NOT override.
-    """
     semantic_verdict = SEMANTIC_TO_VERDICT.get(semantic_base, "Cannot Determine")
     llm_verdict = llm_result.get("llm_verdict", "Unavailable") if llm_result else "Unavailable"
 
@@ -70,7 +67,9 @@ async def predict_outcome(input_data: PromiseInput):
     if history is None:
         return {"error": "History database not found. Run rebuild_gold.py first."}
 
-    query_embedding = model.encode(input_data.text, convert_to_tensor=True)
+    # Offload CPU-bound task (model.encode) to a thread to avoid blocking (Fix for Section 5 point 73)
+    query_embedding = await asyncio.to_thread(model.encode, input_data.text, convert_to_tensor=True)
+    
     cos_scores = util.cos_sim(query_embedding, history_embeddings)[0]
     top_results = torch.topk(cos_scores, k=3)
 
@@ -104,8 +103,9 @@ async def predict_outcome(input_data: PromiseInput):
 
     llm_result = None
     if input_data.use_llm:
-        from nlp_engine.llm_reviewer import review_promise
-        llm_result = review_promise(
+        # Use AsyncGroq reviewer (Fix for Section 5 point 69)
+        from nlp_engine.llm_reviewer import review_promise_async
+        llm_result = await review_promise_async(
             promise=input_data.text,
             semantic_forecast=semantic_forecast,
             confidence=top_score,
