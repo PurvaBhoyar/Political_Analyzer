@@ -1,8 +1,10 @@
 import os
 import json
-from groq import Groq
+from groq import AsyncGroq, Groq
+import asyncio
 
-_client = None
+_async_client = None
+_sync_client = None
 
 SYSTEM_PROMPT = """You are a senior Indian political analyst and independent fact-checker with deep expertise in BJP governance from 2014 to 2024. You have comprehensive knowledge of what actually happened in India during this period — which schemes were launched, which succeeded, which failed, and which were quietly dropped.
 
@@ -64,9 +66,34 @@ Respond ONLY in this exact JSON format:
 }}"""
 
 
-def review_promise(promise: str, semantic_forecast: str, confidence: float, historical_evidence: list) -> dict:
+async def review_promise_async(promise: str, semantic_forecast: str, confidence: float, historical_evidence: list) -> dict:
+    """Non-blocking async version for FastAPI"""
     try:
-        client = get_client()
+        client = get_async_client()
+        prompt = build_prompt(promise, semantic_forecast, confidence, historical_evidence)
+
+        response = await client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1,
+            max_tokens=600,
+            response_format={"type": "json_object"}
+        )
+
+        raw = response.choices[0].message.content
+        return json.loads(raw)
+
+    except Exception as e:
+        return {"error": str(e), "llm_verdict": "Unavailable", "llm_reasoning": f"LLM review failed: {str(e)}"}
+
+
+def review_promise(promise: str, semantic_forecast: str, confidence: float, historical_evidence: list) -> dict:
+    """Sync version for scripts/CLI"""
+    try:
+        client = get_sync_client()
         prompt = build_prompt(promise, semantic_forecast, confidence, historical_evidence)
 
         response = client.chat.completions.create(
@@ -83,17 +110,25 @@ def review_promise(promise: str, semantic_forecast: str, confidence: float, hist
         raw = response.choices[0].message.content
         return json.loads(raw)
 
-    except ValueError as e:
-        return {"error": str(e), "llm_verdict": "Unavailable", "llm_reasoning": "GROQ_API_KEY not configured."}
     except Exception as e:
-        return {"error": str(e), "llm_verdict": "Unavailable", "llm_reasoning": "LLM review failed."}
+        return {"error": str(e), "llm_verdict": "Unavailable", "llm_reasoning": f"LLM review failed: {str(e)}"}
 
 
-def get_client():
-    global _client
-    if _client is None:
+def get_async_client():
+    global _async_client
+    if _async_client is None:
         api_key = os.environ.get("GROQ_API_KEY")
         if not api_key:
-            raise ValueError("GROQ_API_KEY environment variable not set.")
-        _client = Groq(api_key=api_key)
-    return _client
+            raise ValueError("GROQ_API_KEY not set.")
+        _async_client = AsyncGroq(api_key=api_key)
+    return _async_client
+
+
+def get_sync_client():
+    global _sync_client
+    if _sync_client is None:
+        api_key = os.environ.get("GROQ_API_KEY")
+        if not api_key:
+            raise ValueError("GROQ_API_KEY not set.")
+        _sync_client = Groq(api_key=api_key)
+    return _sync_client
