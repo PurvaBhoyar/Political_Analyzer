@@ -1,5 +1,0 @@
-Metric,Baseline (TF-IDF + RF),Proposed (Semantic RAG)
-Accuracy,0.6476,0.724
-ROC-AUC,0.5788,0.815
-Interpretability,High (Feature Importance),Moderate (Vector Proximity)
-Generalization,Limited to Keywords,High (Contextual Similarity)
