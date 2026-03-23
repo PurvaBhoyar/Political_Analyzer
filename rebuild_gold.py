@@ -36,8 +36,51 @@ def rebuild():
     df_2019_labeled = labeler.process_data(df_2019_review, use_semantic=True)
     df_2019_labeled['year'] = 2019
     
+    print("Processing 2019 unlabelled CSV with LLM...")
+    unlabelled_csv_path = raw_dir / "2019_review_unlabelled.csv"
+    if unlabelled_csv_path.exists():
+        from dotenv import load_dotenv
+        import time
+        from nlp_engine import llm_reviewer
+
+        load_dotenv()
+        df_unlabelled = pd.read_csv(str(unlabelled_csv_path))
+        
+        if 'original_text' in df_unlabelled.columns:
+            df_unlabelled = df_unlabelled.rename(columns={'original_text': 'text'})
+            
+        print(f"Auto-labeling {len(df_unlabelled)} records via Llama-3 (Groq)...")
+        new_labels = []
+        for i, row in df_unlabelled.iterrows():
+            promise = str(row['text'])
+            print(f"[{i+1}/{len(df_unlabelled)}] Labeling: {promise[:50]}...")
+            
+            try:
+                res = llm_reviewer.review_promise(promise, "Unknown", 0.0, [])
+                verdict = res.get('llm_verdict', '')
+                
+                if 'Likely Fulfilled' in verdict:
+                    lbl = 2
+                elif 'Partially Fulfilled' in verdict:
+                    lbl = 1
+                elif 'Unlikely' in verdict:
+                    lbl = 0
+                else:
+                    lbl = 1 # Cannot Determine implicitly default to In Progress/Unknown
+            except Exception as e:
+                print(f"Error labeling: {e}")
+                lbl = 1
+                
+            new_labels.append(lbl)
+            time.sleep(0.5) # Rate limit protection
+
+        df_unlabelled['label'] = new_labels
+        dfs_to_concat = [df_2014_labeled, df_2019_labeled, df_unlabelled]
+    else:
+        dfs_to_concat = [df_2014_labeled, df_2019_labeled]
+    
     # 3. Combine
-    df_gold = pd.concat([df_2014_labeled, df_2019_labeled], ignore_index=True)
+    df_gold = pd.concat(dfs_to_concat, ignore_index=True)
     
     # Rename for consistency with checker
     df_gold = df_gold.rename(columns={'text': 'original_text'})

@@ -12,6 +12,7 @@ sentence-transformers
 torch
 fastapi
 uvicorn
+groq
 pdfplumber
 pandas
 numpy

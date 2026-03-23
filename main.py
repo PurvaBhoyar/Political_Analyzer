@@ -61,6 +61,7 @@ SEMANTIC_TO_VERDICT = {
     "Highly Likely": "Likely Fulfilled",
     "Partial": "Partially Fulfilled",
     "Unlikely": "Unlikely to be Fulfilled",
+    "Indeterminate": "Cannot Determine",
 }
 
 def resolve_final_verdict(semantic_base: str, llm_result: dict, top_score: float) -> dict:
@@ -132,7 +133,9 @@ async def predict_outcome(input_data: PromiseInput):
             historical_evidence=matches
         )
 
-    verdict_info = resolve_final_verdict(base_outcome, llm_result, top_score)
+    # Use base_outcome only if confidence is above 0.50; otherwise use "Indeterminate"
+    verdict_base = base_outcome if top_score >= 0.50 else "Indeterminate"
+    verdict_info = resolve_final_verdict(verdict_base, llm_result, top_score)
 
     return {
         "promise": input_data.text,
