@@ -7,7 +7,7 @@ _model = None
 def get_model():
     global _model
     if _model is None:
-        _model = SentenceTransformer('all-MiniLM-L6-v2')
+        _model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
     return _model
 
 def process_data(df, use_semantic=True):
