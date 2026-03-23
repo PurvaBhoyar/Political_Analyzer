@@ -18,7 +18,7 @@ def build_and_run_checker():
     history = pd.read_csv(str(db_path))
     
     # 2. Load Model
-    model = SentenceTransformer('all-MiniLM-L6-v2')
+    model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
     
     # 3. Index History
     print(f"Indexing {len(history)} historical records...")
