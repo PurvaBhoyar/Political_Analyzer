@@ -15,3 +15,8 @@ uvicorn
 pdfplumber
 pandas
 numpy
+streamlit
+requests
+deep-translator
+beautifulsoup4
+streamlit

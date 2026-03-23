@@ -8,26 +8,48 @@ import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load .env file if it exists (Fix for Section 6 point 82)
+# Load .env file
 load_dotenv()
 
 app = FastAPI(title="Political Promise Fact-Checker", version="2.0")
 
-# Setup Pathlib (Fix for Section 1 point 19)
+# Setup Pathlib
 BASE_DIR = Path(__file__).parent
 HISTORY_PATH = BASE_DIR / "data" / "processed" / "gold_database.csv"
+MODEL_SAVE_PATH = BASE_DIR / "models" / "all-MiniLM-L6-v2-local"
 
-print("Loading Semantic Engine...")
-model = SentenceTransformer('all-MiniLM-L6-v2')
+# Singleton-like loading to prevent multiple loads
+model = None
+history = None
+history_embeddings = None
 
-if HISTORY_PATH.exists():
-    history = pd.read_csv(str(HISTORY_PATH))
-    print(f"Indexing {len(history)} historical records...")
-    # Pre-index for performance
-    history_embeddings = model.encode(history['original_text'].astype(str).tolist(), convert_to_tensor=True)
-else:
-    history = None
-    history_embeddings = None
+def get_model():
+    global model
+    if model is None:
+        if MODEL_SAVE_PATH.exists():
+            print(f"Loading Semantic Engine from LOCAL cache: {MODEL_SAVE_PATH}")
+            model = SentenceTransformer(str(MODEL_SAVE_PATH))
+        else:
+            print("Downloading and Caching Semantic Engine...")
+            model = SentenceTransformer('all-MiniLM-L6-v2')
+            os.makedirs(MODEL_SAVE_PATH.parent, exist_ok=True)
+            model.save(str(MODEL_SAVE_PATH))
+            print(f"Model saved to {MODEL_SAVE_PATH}")
+    return model
+
+@app.on_event("startup")
+async def startup_event():
+    global history, history_embeddings
+    get_model()
+    
+    if HISTORY_PATH.exists():
+        history = pd.read_csv(str(HISTORY_PATH))
+        print(f"Indexing {len(history)} historical records...")
+        # Pre-index for performance
+        history_embeddings = model.encode(history['original_text'].astype(str).tolist(), convert_to_tensor=True)
+        print("Indexing Complete.")
+    else:
+        print("WARNING: History database not found.")
 
 class PromiseInput(BaseModel):
     text: str
@@ -61,13 +83,12 @@ def resolve_final_verdict(semantic_base: str, llm_result: dict, top_score: float
         )
     }
 
-
 @app.post("/predict")
 async def predict_outcome(input_data: PromiseInput):
     if history is None:
         return {"error": "History database not found. Run rebuild_gold.py first."}
 
-    # Offload CPU-bound task (model.encode) to a thread to avoid blocking (Fix for Section 5 point 73)
+    # Offload CPU-bound task (model.encode) to a thread
     query_embedding = await asyncio.to_thread(model.encode, input_data.text, convert_to_tensor=True)
     
     cos_scores = util.cos_sim(query_embedding, history_embeddings)[0]
@@ -103,7 +124,6 @@ async def predict_outcome(input_data: PromiseInput):
 
     llm_result = None
     if input_data.use_llm:
-        # Use AsyncGroq reviewer (Fix for Section 5 point 69)
         from nlp_engine.llm_reviewer import review_promise_async
         llm_result = await review_promise_async(
             promise=input_data.text,
@@ -128,7 +148,6 @@ async def predict_outcome(input_data: PromiseInput):
         "llm_review": llm_result,
         "historical_evidence": matches
     }
-
 
 @app.get("/health")
 async def health():
