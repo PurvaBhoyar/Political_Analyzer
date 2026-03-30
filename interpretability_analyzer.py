@@ -69,5 +69,45 @@ def run_interpretability():
     
     print("Global Feature Importance graph saved to data/output/xai/global_feature_importance.png")
 
+def semantic_heatmap():
+    print("\n--- RUNNING SEMANTIC SIMILARITY HEATMAP (Prompt 7) ---")
+    model_path = 'models/finetuned-politicheck-multilingual'
+    if not os.path.exists(model_path):
+        print(f"WARNING: Fine-tuned model not found at {model_path}. Using base model instead.")
+        model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+    else:
+        model = SentenceTransformer(model_path)
+    
+    df = pd.read_csv('data/processed/gold_database.csv')
+    # Randomly sample 8 promises
+    sample_df = df.sample(8, random_state=42)
+    sample_texts = sample_df['original_text'].tolist()
+    all_texts = df['original_text'].tolist()
+    
+    print("Encoding promises...")
+    sample_embs = model.encode(sample_texts, convert_to_tensor=True)
+    all_embs = model.encode(all_texts, convert_to_tensor=True)
+    
+    cos_scores = util.cos_sim(sample_embs, all_embs)
+    
+    heatmap_data = []
+    row_labels = [text[:40] + "..." for text in sample_texts]
+    
+    for i in range(len(sample_texts)):
+        # Get top 3 scores (excluding self if necessary, but here we just want top 3 matches)
+        top_scores, _ = torch.topk(cos_scores[i], k=3)
+        heatmap_data.append(top_scores.tolist())
+    
+    plt.figure(figsize=(12, 8))
+    sns.heatmap(heatmap_data, annot=True, fmt=".3f", cmap='YlOrRd', 
+                yticklabels=row_labels, xticklabels=['Top-1 Match', 'Top-2 Match', 'Top-3 Match'])
+    plt.title("RAG Retrieval: Semantic Similarity Scores (Explainability)")
+    plt.tight_layout()
+    os.makedirs('data/output/xai', exist_ok=True)
+    plt.savefig('data/output/xai/semantic_similarity_heatmap.png')
+    plt.close()
+    print("Semantic Similarity Heatmap saved to data/output/xai/semantic_similarity_heatmap.png")
+
 if __name__ == "__main__":
     run_interpretability()
+    semantic_heatmap()

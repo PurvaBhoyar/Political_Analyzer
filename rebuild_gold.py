@@ -24,6 +24,22 @@ def rebuild():
     # We label based on the remark.
     df_2014_labeled = labeler.process_data(df_2014_review, use_semantic=True)
     df_2014_labeled['year'] = 2014
+
+    # --- FIX TEMPORAL DRIFT (Optional but Recommended) ---
+    # We can use the LLM to verify if 2014 'Partial' or 'Unlikely' were actually fulfilled by 2024
+    REVERIFY_2014 = os.getenv("REVERIFY_2014", "false").lower() == "true"
+    if REVERIFY_2014:
+        from nlp_engine import llm_reviewer
+        import time
+        print("Re-verifying 2014 labels for Temporal Drift...")
+        for i, row in df_2014_labeled.iterrows():
+            if row['label'] < 2: # Only check non-fulfilled ones
+                res = llm_reviewer.review_promise(row['text'], "Historical Check", 0.0, [])
+                verdict = res.get('llm_verdict', '')
+                if 'Likely Fulfilled' in verdict:
+                    df_2014_labeled.at[i, 'label'] = 2
+                    print(f"Updated 2014: {row['text'][:50]} -> Fulfilled")
+                time.sleep(0.2)
     
     # 2. Process 2019
     print("Processing 2019 data...")

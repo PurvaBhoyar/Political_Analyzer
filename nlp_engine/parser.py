@@ -93,6 +93,10 @@ def extract_manifesto_promises(pdf_path):
         print(f"Error: PDF not found at {pdf_path}")
         return pd.DataFrame()
 
+    # Filter keywords for forward-looking promises
+    keywords = ["will", "shall", "ensure", "provide", "build", "create", "establish", 
+                "develop", "implement", "launch", "strengthen", "promote", "protect", "support"]
+
     with pdfplumber.open(pdf_path) as pdf:
         num_pages = len(pdf.pages)
         start_page = min(5, num_pages - 1) if num_pages > 0 else 0
@@ -104,6 +108,13 @@ def extract_manifesto_promises(pdf_path):
                     lines = text.split('\n')
                     current_promise = ""
                     
+                    def add_promise(promise_text, pg):
+                        promise_text = " ".join(promise_text.split()) # Strip extra whitespace
+                        if len(promise_text) <= 300: # Filter 1: Length
+                            # Filter 2: Keywords
+                            if any(kw in promise_text.lower() for kw in keywords):
+                                all_promises.append({"text": promise_text, "page": pg})
+
                     for line in lines:
                         line = line.strip()
                         is_numbered = re.match(r'^\d{1,2}\s+', line)
@@ -111,13 +122,13 @@ def extract_manifesto_promises(pdf_path):
                         
                         if is_numbered or is_we_will:
                             if current_promise:
-                                all_promises.append({"text": current_promise, "page": page.page_number})
+                                add_promise(current_promise, page.page_number)
                             current_promise = line
                         elif current_promise:
                             current_promise += " " + line
                     
                     if current_promise:
-                        all_promises.append({"text": current_promise, "page": page.page_number})
+                        add_promise(current_promise, page.page_number)
             except Exception as e:
                 print(f"Warning: Failed to extract text from page {page.page_number}: {e}")
                 continue

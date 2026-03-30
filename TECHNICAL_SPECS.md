@@ -4,9 +4,9 @@
 
 | Component | Parameter | Value | Description |
 |-----------|-----------|-------|-------------|
-| **Embedding Model** | Model Name | `all-MiniLM-L6-v2` | SBERT dense vector model |
-| | Dimensions | 384 | Size of the output vector |
-| | Max Seq Length | 256 tokens | Longer text is truncated |
+| **Embedding Model** | Model Name | `paraphrase-multilingual-MiniLM-L12-v2` | SBERT dense vector model |
+| | Dimensions | 512 | Size of the output vector |
+| | Max Seq Length | 128 tokens | Longer text is truncated |
 | **LLM Skeptic** | Model Name | `llama-3.3-70b-versatile` | Groq-hosted Llama-3 model |
 | | Temperature | 0.1 | Low temperature for factual consistency |
 | | Max Tokens | 600 | Limit for reasoning and JSON response |

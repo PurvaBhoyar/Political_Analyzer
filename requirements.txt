@@ -16,6 +16,7 @@ groq
 pdfplumber
 pandas
 numpy
+datasets
 streamlit
 requests
 deep-translator

@@ -16,7 +16,8 @@ app = FastAPI(title="Political Promise Fact-Checker", version="2.0")
 # Setup Pathlib
 BASE_DIR = Path(__file__).parent
 HISTORY_PATH = BASE_DIR / "data" / "processed" / "gold_database.csv"
-MODEL_SAVE_PATH = BASE_DIR / "models" / "all-MiniLM-L6-v2-local"
+MODEL_SAVE_PATH = BASE_DIR / "models" / "paraphrase-multilingual-MiniLM-L12-v2-local"
+FINE_TUNED_MODEL_PATH = BASE_DIR / "models" / "finetuned-politicheck-multilingual"
 
 # Singleton-like loading to prevent multiple loads
 model = None
@@ -26,12 +27,18 @@ history_embeddings = None
 def get_model():
     global model
     if model is None:
-        if MODEL_SAVE_PATH.exists():
-            print(f"Loading Semantic Engine from LOCAL cache: {MODEL_SAVE_PATH}")
+        # Priority 1: Fine-tuned Model
+        if FINE_TUNED_MODEL_PATH.exists():
+            print(f"Loading FINE-TUNED Semantic Engine: {FINE_TUNED_MODEL_PATH}")
+            model = SentenceTransformer(str(FINE_TUNED_MODEL_PATH))
+        # Priority 2: Local Cache of Base Model
+        elif MODEL_SAVE_PATH.exists():
+            print(f"Loading Base Semantic Engine from LOCAL cache: {MODEL_SAVE_PATH}")
             model = SentenceTransformer(str(MODEL_SAVE_PATH))
+        # Priority 3: Download from HuggingFace
         else:
-            print("Downloading and Caching Semantic Engine...")
-            model = SentenceTransformer('all-MiniLM-L6-v2')
+            print("Downloading and Caching Base Semantic Engine...")
+            model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
             os.makedirs(MODEL_SAVE_PATH.parent, exist_ok=True)
             model.save(str(MODEL_SAVE_PATH))
             print(f"Model saved to {MODEL_SAVE_PATH}")
@@ -61,6 +68,9 @@ SEMANTIC_TO_VERDICT = {
     "Highly Likely": "Likely Fulfilled",
     "Partial": "Partially Fulfilled",
     "Unlikely": "Unlikely to be Fulfilled",
+    "Low Confidence Highly Likely": "Likely Fulfilled (Low Confidence)",
+    "Low Confidence Partial": "Partially Fulfilled (Low Confidence)",
+    "Low Confidence Unlikely": "Unlikely to be Fulfilled (Low Confidence)",
     "Indeterminate": "Cannot Determine",
 }
 
@@ -93,19 +103,62 @@ async def predict_outcome(input_data: PromiseInput):
     query_embedding = await asyncio.to_thread(model.encode, input_data.text, convert_to_tensor=True)
     
     cos_scores = util.cos_sim(query_embedding, history_embeddings)[0]
-    top_results = torch.topk(cos_scores, k=3)
+    # Diversity-aware retrieval: Get more candidates than needed
+    top_candidates = torch.topk(cos_scores, k=min(10, len(history)))
 
     matches = []
-    for i in range(len(top_results.indices)):
-        idx = top_results.indices[i].item()
-        score = top_results.values[i].item()
+    seen_labels = set()
+    
+    # Always include the absolute best match
+    best_idx = top_candidates.indices[0].item()
+    best_score = float(top_candidates.values[0].item())
+    best_row = history.iloc[best_idx]
+    best_label_str = label_map[int(best_row['label'])]
+    
+    matches.append({
+        "historical_text": str(best_row['original_text']),
+        "outcome": best_label_str,
+        "similarity": round(best_score, 4),
+        "year": int(best_row['year']) if 'year' in best_row else 0
+    })
+    seen_labels.add(best_label_str)
+
+    # Diversity-aware retrieval for subsequent matches
+    # Prefer matches with DIFFERENT labels if they are within a reasonable similarity range
+    for i in range(1, len(top_candidates.indices)):
+        if len(matches) >= 3:
+            break
+            
+        idx = top_candidates.indices[i].item()
+        score = float(top_candidates.values[i].item())
         row = history.iloc[idx]
-        matches.append({
-            "historical_text": str(row['original_text']),
-            "outcome": label_map[int(row['label'])],
-            "similarity": round(float(score), 4),
-            "year": int(row['year']) if 'year' in row else 0
-        })
+        label_str = label_map[int(row['label'])]
+        
+        # Heuristic: If label is new AND score is within 10% of best, OR we just need to fill slots
+        if (label_str not in seen_labels and (best_score - score) < 0.10) or (len(matches) < 3 and i > 5):
+            matches.append({
+                "historical_text": str(row['original_text']),
+                "outcome": label_str,
+                "similarity": round(score, 4),
+                "year": int(row['year']) if 'year' in row else 0
+            })
+            seen_labels.add(label_str)
+
+    # If we still don't have 3 matches (rare), fill with next best
+    if len(matches) < 3:
+        for i in range(1, len(top_candidates.indices)):
+            if len(matches) >= 3: break
+            idx = top_candidates.indices[i].item()
+            score = float(top_candidates.values[i].item())
+            row = history.iloc[idx]
+            label_str = label_map[int(row['label'])]
+            if not any(m['historical_text'] == str(row['original_text']) for m in matches):
+                matches.append({
+                    "historical_text": str(row['original_text']),
+                    "outcome": label_str,
+                    "similarity": round(score, 4),
+                    "year": int(row['year']) if 'year' in row else 0
+                })
 
     top_score = matches[0]['similarity']
     base_outcome = matches[0]['outcome']
@@ -126,15 +179,32 @@ async def predict_outcome(input_data: PromiseInput):
     llm_result = None
     if input_data.use_llm:
         from nlp_engine.llm_reviewer import review_promise_async
-        llm_result = await review_promise_async(
-            promise=input_data.text,
-            semantic_forecast=semantic_forecast,
-            confidence=top_score,
-            historical_evidence=matches
-        )
+        try:
+            # Set a timeout for the LLM review to prevent hanging
+            llm_result = await asyncio.wait_for(
+                review_promise_async(
+                    promise=input_data.text,
+                    semantic_forecast=semantic_forecast,
+                    confidence=top_score,
+                    historical_evidence=matches
+                ),
+                timeout=15.0
+            )
+        except asyncio.TimeoutError:
+            print("LLM Review timed out.")
+            llm_result = {"error": "Timeout", "llm_verdict": "Unavailable", "llm_reasoning": "Skeptic layer timed out."}
+        except Exception as e:
+            print(f"LLM Review error: {e}")
+            llm_result = {"error": str(e), "llm_verdict": "Unavailable", "llm_reasoning": f"Skeptic layer error: {e}"}
 
-    # Use base_outcome only if confidence is above 0.50; otherwise use "Indeterminate"
-    verdict_base = base_outcome if top_score >= 0.50 else "Indeterminate"
+    # Determine verdict_base based on top_score thresholds
+    if top_score >= 0.65:
+        verdict_base = base_outcome
+    elif top_score >= 0.50:
+        verdict_base = "Low Confidence " + base_outcome
+    else:
+        verdict_base = "Indeterminate"
+
     verdict_info = resolve_final_verdict(verdict_base, llm_result, top_score)
 
     return {
