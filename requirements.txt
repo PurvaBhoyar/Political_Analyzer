@@ -22,3 +22,5 @@ requests
 deep-translator
 beautifulsoup4
 streamlit>=1.35.0
+rouge-score
+bert-score
