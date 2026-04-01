@@ -73,7 +73,7 @@ def run_finetuning():
     evaluator = evaluation.EmbeddingSimilarityEvaluator(val_sentences1, val_sentences2, val_scores, name=eval_name)
     
     # 6. Fine-tune
-    num_epochs = 3 
+    num_epochs = 10
     os.makedirs('data/output/metrics', exist_ok=True)
     
     epoch_scores = []
