@@ -159,7 +159,7 @@ async def predict_outcome(input_data: PromiseInput):
     if hinglish_detected:
         encoding_text = await normalize_hinglish(input_data.text)
 
-    # Step 2: Dual-Model Ensembling with the (possibly normalized) text
+    # Step 2: Dual-Model Ensembling (Highest score wins implicitly)
     query_embedding_base = await asyncio.to_thread(model_base.encode, encoding_text, convert_to_tensor=True)
     query_embedding_finetuned = await asyncio.to_thread(model_finetuned.encode, encoding_text, convert_to_tensor=True)
     
@@ -172,7 +172,7 @@ async def predict_outcome(input_data: PromiseInput):
     top_score_base_val = top_results_base.values[0].item()
     top_score_finetuned_val = top_results_finetuned.values[0].item()
     
-    # The model with the highest similarity score "understood" the text better
+    # Implicit routing: return data from the model with the highest similarity score
     used_base_model = top_score_base_val > top_score_finetuned_val
     top_results = top_results_base if used_base_model else top_results_finetuned
 
@@ -203,11 +203,6 @@ async def predict_outcome(input_data: PromiseInput):
     else:
         semantic_forecast = "Indeterminate"
         semantic_reasoning = "No relevant historical precedent found below 0.50 similarity."
-        
-    router_note = "(Routed to multilingual base model)" if used_base_model else "(Routed to fine-tuned English model)"
-    if hinglish_detected:
-        router_note = f"(Hinglish normalized: '{encoding_text}') {router_note}"
-    semantic_reasoning = f"{router_note} {semantic_reasoning}"
 
     llm_result = None
     if input_data.use_llm:

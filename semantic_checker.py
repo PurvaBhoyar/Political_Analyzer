@@ -18,7 +18,13 @@ def build_and_run_checker():
     history = pd.read_csv(str(db_path))
     
     # 2. Load Model
-    model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+    model_path = 'models/finetuned-politicheck-multilingual'
+    if os.path.exists(model_path):
+        print("Using Fine-Tuned Model")
+        model = SentenceTransformer(model_path)
+    else:
+        print("Using Base Model")
+        model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
     
     # 3. Index History
     print(f"Indexing {len(history)} historical records...")
