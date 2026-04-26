@@ -1,0 +1,9 @@
+               precision    recall  f1-score   support
+
+     Unlikely       0.00      0.00      0.00         6
+      Partial       0.62      0.93      0.75        74
+Highly Likely       0.62      0.18      0.28        44
+
+     accuracy                           0.62       124
+    macro avg       0.41      0.37      0.34       124
+ weighted avg       0.59      0.62      0.54       124

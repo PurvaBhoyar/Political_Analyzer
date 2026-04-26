@@ -2,8 +2,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     accuracy_score, f1_score, precision_score, recall_score,
@@ -14,122 +12,139 @@ from sklearn.preprocessing import label_binarize
 from sentence_transformers import SentenceTransformer, util
 import torch
 import os
+import warnings
+
+warnings.filterwarnings('ignore')
 
 # Set seeds for reproducibility
 np.random.seed(42)
 
 def run_comparison():
-    print("--- RUNNING ADVANCED BASELINE COMPARISON (Section 6c, 6f, 6i) ---")
+    print("--- DENSE RAG EVALUATION (BASE VS FINE-TUNED) ---")
     
     # Load Gold Database
     df = pd.read_csv('data/processed/gold_database.csv')
     X = df['original_text'].astype(str)
-    y = df['label']
-    n_classes = len(np.unique(y))
+    y = df['label'].values
+    class_names = ['Unlikely', 'Partial', 'Highly Likely']
 
-    # Split data (Section 5k)
+    # Split data (Ensuring the same dataset slice is used to represent the historical vs test query split)
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
-
-    # --- 1. Baseline: TF-IDF + Random Forest ---
-    print("Training Baseline: TF-IDF + Random Forest...")
-    tfidf = TfidfVectorizer(max_features=5000, stop_words='english')
-    X_train_tfidf = tfidf.fit_transform(X_train)
-    X_test_tfidf = tfidf.transform(X_test)
-
-    rf = RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42)
-    rf.fit(X_train_tfidf, y_train)
-    rf_preds = rf.predict(X_test_tfidf)
-    rf_probs = rf.predict_proba(X_test_tfidf)
-
-    # --- 2. Proposed: Semantic RAG (MiniLM) ---
-    print("Evaluating Proposed: Semantic RAG (MiniLM)...")
-    model = SentenceTransformer('all-MiniLM-L6-v2')
-    
-    anchors = {
-        2: ["Project completed and operational.", "Successfully implemented and achieved."],
-        1: ["Work in progress and ongoing.", "Partial implementation underway."],
-        0: ["No progress made, stalled.", "Cancelled or likely to be unfulfilled."]
-    }
-    
-    anchor_texts = []
-    anchor_labels = []
-    for label, texts in anchors.items():
-        for text in texts:
-            anchor_texts.append(text)
-            anchor_labels.append(label)
-    
-    anchor_embs = model.encode(anchor_texts, convert_to_tensor=True)
-    test_embs = model.encode(X_test.tolist(), convert_to_tensor=True)
-    
-    cos_scores = util.cos_sim(test_embs, anchor_embs)
-    
-    # Get probabilities/scores for RAG (mapping max similarity per class)
-    rag_probs = []
-    for i in range(len(X_test)):
-        class_scores = []
-        for label in [0, 1, 2]:
-            label_indices = [idx for idx, l in enumerate(anchor_labels) if l == label]
-            class_scores.append(cos_scores[i][label_indices].max().item())
-        rag_probs.append(class_scores)
-    rag_probs = np.array(rag_probs)
-    # Softmax to turn similarities into pseudo-probabilities for ROC/PR
-    rag_probs = np.exp(rag_probs) / np.sum(np.exp(rag_probs), axis=1)[:, None]
-    rag_preds = np.argmax(rag_probs, axis=1)
-
-    # --- 3. Performance Metrics (Section 6c) ---
-    def get_metrics(y_true, y_pred, name):
-        return {
-            "Model": name,
-            "Accuracy": accuracy_score(y_true, y_pred),
-            "Precision": precision_score(y_true, y_pred, average='weighted'),
-            "Recall": recall_score(y_true, y_pred, average='weighted'),
-            "F1-Score": f1_score(y_true, y_pred, average='weighted')
-        }
-
-    rf_metrics = get_metrics(y_test, rf_preds, "Baseline (RF)")
-    rag_metrics = get_metrics(y_test, rag_preds, "Proposed (RAG)")
-    
-    results = pd.DataFrame([rf_metrics, rag_metrics])
-    print("\nComparison Metrics:")
-    print(results.to_string(index=False))
-    
-    os.makedirs('data/output/metrics', exist_ok=True)
-    results.to_csv('data/output/metrics/performance_comparison.csv', index=False)
-
-    # --- 4. Required Graphs (Section 6f) ---
-    
-    # A. Confusion Matrices
-    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
-    sns.heatmap(confusion_matrix(y_test, rf_preds), annot=True, fmt='d', cmap='Blues', ax=axes[0])
-    axes[0].set_title('Confusion Matrix: Baseline (RF)')
-    sns.heatmap(confusion_matrix(y_test, rag_preds), annot=True, fmt='d', cmap='Greens', ax=axes[1])
-    axes[1].set_title('Confusion Matrix: Proposed (RAG)')
-    plt.savefig('data/output/metrics/confusion_matrices.png')
-    plt.close()
-
-    # B. ROC-AUC Curves (One-vs-Rest)
     y_test_bin = label_binarize(y_test, classes=[0, 1, 2])
-    plt.figure(figsize=(10, 8))
-    for i, color in zip(range(3), ['blue', 'red', 'green']):
-        fpr, tpr, _ = roc_curve(y_test_bin[:, i], rag_probs[:, i])
-        plt.plot(fpr, tpr, color=color, lw=2, label=f'Class {i} (AUC = {auc(fpr, tpr):.2f})')
-    plt.plot([0, 1], [0, 1], 'k--', lw=2)
-    plt.title('ROC-AUC Curves: Proposed (RAG) System')
-    plt.legend(loc="lower right")
-    plt.savefig('data/output/metrics/roc_auc_curves.png')
+
+    print("Loading Base Multilingual Model...")
+    base_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+    
+    print("Encoding database and queries...")
+    train_embs_base = base_model.encode(X_train.tolist(), convert_to_tensor=True, show_progress_bar=False)
+    test_embs_base = base_model.encode(X_test.tolist(), convert_to_tensor=True, show_progress_bar=False)
+    
+    def get_knn_rag_probs(test_embs, train_embs, train_labels):
+        cos_scores = util.cos_sim(test_embs, train_embs)
+        probs = []
+        preds = []
+        for i in range(len(test_embs)):
+            # Probabilities derived from similarity scores to all labels
+            scores = [0.0, 0.0, 0.0]
+            for label in [0, 1, 2]:
+                label_indices = np.where(train_labels == label)[0]
+                if len(label_indices) > 0:
+                    # use the max similarity score belonging to this historical label group
+                    scores[label] = cos_scores[i][label_indices].max().item()
+            
+            exp_scores = np.exp(scores)
+            p = exp_scores / np.sum(exp_scores)
+            probs.append(p)
+            
+            # Prediction remains pure top-1 nearest neighbor strictly via Cosine Sim
+            best_idx = torch.argmax(cos_scores[i]).item()
+            preds.append(train_labels[best_idx])
+            
+        return np.array(preds), np.array(probs)
+
+    print("Evaluating Base Model KNN RAG Retrieval...")
+    base_preds, base_probs = get_knn_rag_probs(test_embs_base, train_embs_base, y_train)
+
+    # Fine-tuned Model Validation
+    ft_model_path = 'models/finetuned-politicheck-multilingual'
+    if not os.path.exists(ft_model_path):
+        print(f"WARNING: Fine-tuned model not found at {ft_model_path}. Skipping.")
+        models_to_compare = [
+            ("Base Multilingual MiniLM", base_preds, base_probs)
+        ]
+    else:
+        print("Loading Fine-tuned Multilingual MiniLM...")
+        ft_model = SentenceTransformer(ft_model_path)
+        
+        print("Encoding semantic space...")
+        train_embs_ft = ft_model.encode(X_train.tolist(), convert_to_tensor=True, show_progress_bar=False)
+        test_embs_ft = ft_model.encode(X_test.tolist(), convert_to_tensor=True, show_progress_bar=False)
+        
+        print("Evaluating Fine-tuned Model KNN RAG Retrieval...")
+        ft_preds, ft_probs = get_knn_rag_probs(test_embs_ft, train_embs_ft, y_train)
+        
+        models_to_compare = [
+            ("Base Multilingual MiniLM", base_preds, base_probs),
+            ("Proposed Fine-tuned MiniLM", ft_preds, ft_probs)
+        ]
+
+    # --- Metrics Collection ---
+    metrics_list = []
+    for name, preds, probs in models_to_compare:
+        metrics_list.append({
+            "Model": name,
+            "Accuracy": accuracy_score(y_test, preds),
+            "Precision": precision_score(y_test, preds, average='weighted'),
+            "Recall": recall_score(y_test, preds, average='weighted'),
+            "F1-Score": f1_score(y_test, preds, average='weighted')
+        })
+        
+        report = classification_report(y_test, preds, target_names=class_names)
+        print(f"\nClassification Report for {name}:")
+        print(report)
+        
+        # Save exact classification reports
+        sanitized_name = name.lower().replace(' ', '_').replace('(', '').replace(')', '').replace('-', '_')
+        report_path = f'data/output/metrics/report_{sanitized_name}.txt'
+        os.makedirs(os.path.dirname(report_path), exist_ok=True)
+        with open(report_path, 'w') as f:
+            f.write(report)
+        print(f"Report saved to {report_path}")
+
+    metrics_df = pd.DataFrame(metrics_list)
+    metrics_df.to_csv('data/output/metrics/dense_comparison.csv', index=False)
+
+    # --- Visualizations ---
+    # Side-by-side Confusion Matrices
+    n_models = len(models_to_compare)
+    fig, axes = plt.subplots(1, n_models, figsize=(6 * n_models, 5))
+    if n_models == 1: axes = [axes]
+    for i, (name, preds, _) in enumerate(models_to_compare):
+        sns.heatmap(confusion_matrix(y_test, preds), annot=True, fmt='d', cmap='Blues', ax=axes[i],
+                    xticklabels=class_names, yticklabels=class_names)
+        axes[i].set_title(f'{name}')
+        axes[i].set_xlabel('Predicted')
+        axes[i].set_ylabel('Actual')
+    plt.tight_layout()
+    plt.savefig('data/output/metrics/confusion_matrices_rag.png')
     plt.close()
 
-    # C. Precision-Recall Curves
-    plt.figure(figsize=(10, 8))
-    for i, color in zip(range(3), ['blue', 'red', 'green']):
-        precision, recall, _ = precision_recall_curve(y_test_bin[:, i], rag_probs[:, i])
-        plt.plot(recall, precision, color=color, lw=2, label=f'Class {i}')
-    plt.title('Precision-Recall Curves: Proposed (RAG) System')
-    plt.legend(loc="lower left")
-    plt.savefig('data/output/metrics/precision_recall_curves.png')
-    plt.close()
+    # ROC-AUC curves
+    for name, _, probs in models_to_compare:
+        sanitized_name = name.lower().replace(' ', '_').replace('(', '').replace(')', '').replace('-', '_')
+        plt.figure(figsize=(8, 6))
+        for i in range(3):
+            fpr, tpr, _ = roc_curve(y_test_bin[:, i], probs[:, i])
+            plt.plot(fpr, tpr, label=f'{class_names[i]} (AUC = {auc(fpr, tpr):.2f})')
+        plt.plot([0, 1], [0, 1], 'k--')
+        plt.title(f'ROC Curve: {name}')
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.legend()
+        plt.savefig(f'data/output/metrics/roc_auc_{sanitized_name}.png')
+        plt.close()
 
-    print("\nAll performance graphs (Confusion Matrix, ROC-AUC, PR Curves) saved to data/output/metrics/")
+    print("\nSuccessfully wiped TF-IDF. True RAG metrics explicitly recorded in data/output/metrics/")
 
 if __name__ == "__main__":
     run_comparison()

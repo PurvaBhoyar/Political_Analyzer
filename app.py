@@ -104,7 +104,11 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- API ENDPOINT ---
-API_URL = "http://127.0.0.1:8000/predict"
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8000/predict")
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -123,6 +127,7 @@ with st.sidebar:
     - **NLP Engine:** SBERT L6-v2
     - **Gold DB Size:** ~1,000 Entries
     """)
+    st.warning("**Bias Advisory:** Dataset is primarily sourced from internal review documents. Predicted probability may be skewed towards positive outcomes.")
     st.success("Core Engine: Ready")
     
     st.markdown("---")
